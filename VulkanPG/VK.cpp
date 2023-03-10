@@ -12,6 +12,7 @@ void VK::initWindow() {
 void VK::initVulkan() {
     createInstance();
     setupDebugMessenger();
+    pickPhysicalDevice();
 }
 
 void VK::mainLoop() {
@@ -65,7 +66,19 @@ void VK::createInstance()
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
 
-    createInfo.enabledLayerCount = 0;
+    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+    if (enableValidationLayers) {
+        createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+        createInfo.ppEnabledLayerNames = validationLayers.data();
+
+        populateDebugMessengerCreateInfo(debugCreateInfo);
+        createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
+    }
+    else {
+        createInfo.enabledLayerCount = 0;
+
+        createInfo.pNext = nullptr;
+    }
 
     if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS) {
         throw std::runtime_error("failed to create instance!");
@@ -119,17 +132,72 @@ std::vector<const char*> VK::getRequiredExtensions()
     return extensions;
 }
 
-void VK::setupDebugMessenger() {
-    if (!enableValidationLayers) return;
-
-    VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
+    createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
     createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     createInfo.pfnUserCallback = debugCallback;
-    createInfo.pUserData = nullptr;
+}
+
+void VK::setupDebugMessenger() {
+    if (!enableValidationLayers) return;
+
+    VkDebugUtilsMessengerCreateInfoEXT createInfo;
+    populateDebugMessengerCreateInfo(createInfo);
 
     if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
         throw std::runtime_error("failed to set up debug messenger!");
+    }
+}
+
+bool isDeviceSuitable(VkPhysicalDevice device) {
+    QueueFamilyIndices indices = findQueueFamilies(device);
+
+    return indices.isComplete();
+}
+
+void VK::pickPhysicalDevice()
+{
+    uint32_t deviceCount = 0;
+    vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+
+    if (deviceCount == 0) {
+        throw std::runtime_error("failed to find GPUs with Vulkan support!");
+    }
+
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+    for (const auto& device : devices) {
+        if (isDeviceSuitable(device)) {
+            physicalDevice = device;
+            break;
+        }
+    }
+
+    if (physicalDevice == VK_NULL_HANDLE) {
+        throw std::runtime_error("failed to find a suitable GPU!");
+    }
+
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(device, &deviceProperties);
+
+    VkPhysicalDeviceFeatures deviceFeatures;
+    vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+
+    std::multimap<int, VkPhysicalDevice> candidates;
+
+    for (const auto& device : devices) {
+        int score = rateDeviceSuitability(device);
+        candidates.insert(std::make_pair(score, device));
+    }
+
+    // Check if the best candidate is suitable at all
+    if (candidates.rbegin()->first > 0) {
+        physicalDevice = candidates.rbegin()->second;
+    }
+    else {
+        throw std::runtime_error("failed to find a suitable GPU!");
     }
 }
